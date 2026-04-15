@@ -881,7 +881,8 @@ document.getElementById('apply-map-btn').onclick=()=>{
   const di=parseInt(document.getElementById('col-date').value);
   const si=parseInt(document.getElementById('col-store').value);
   const ai=parseInt(document.getElementById('col-amt').value);
-  txRows=rawRows.map(r=>{
+
+  const newRows=rawRows.map(r=>{
     const store=String(r[si]||'').trim();
     const raw=String(r[ai]||'').replace(/,/g,'').replace(/[^0-9.-]/g,'');
     const amt=parseFloat(raw)||0;
@@ -892,11 +893,101 @@ document.getElementById('apply-map-btn').onclick=()=>{
     const catId=autoClassify(store);
     return {date,store,amt,catId,auto:catId!==null};
   }).filter(r=>r.amt>0&&r.store);
-  const auto=txRows.filter(r=>r.auto).length;
-  document.getElementById('upload-msg').textContent=`${txRows.length}건 처리 완료 · 자동분류 ${auto}건 / 미분류 ${txRows.length-auto}건`;
-  renderTxList();
-  showToast(`자동분류 ${auto}건 / 미분류 ${txRows.length-auto}건`);
+
+  if(!newRows.length){showToast('처리할 내역이 없습니다.');return;}
+
+  // 기존 내역이 있으면 확인 절차
+  if(txRows.length>0){
+    showMergeConfirm(newRows);
+  } else {
+    txRows=newRows;
+    finishApply();
+  }
 };
+
+function showMergeConfirm(newRows){
+  // 기존 합계
+  const prevTotal=txRows.reduce((a,r)=>a+r.amt,0);
+  const newTotal=newRows.reduce((a,r)=>a+r.amt,0);
+
+  // 확인 다이얼로그 동적 생성
+  let overlay=document.getElementById('merge-overlay');
+  if(!overlay){
+    overlay=document.createElement('div');
+    overlay.id='merge-overlay';
+    overlay.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:300;display:flex;align-items:center;justify-content:center';
+    document.body.appendChild(overlay);
+  }
+  overlay.innerHTML=`
+    <div style="background:#fff;border-radius:14px;padding:24px;width:92%;max-width:400px;box-shadow:0 8px 32px rgba(0,0,0,.18)">
+      <div style="font-size:15px;font-weight:600;color:#1a1a2e;margin-bottom:6px">기존 내역이 있습니다</div>
+      <div style="font-size:12px;color:#888;margin-bottom:16px">어떻게 처리할까요?</div>
+      <div style="background:#f5f5f5;border-radius:8px;padding:12px;margin-bottom:16px;font-size:12px">
+        <div style="display:flex;justify-content:space-between;margin-bottom:6px">
+          <span style="color:#555">기존 내역</span>
+          <span style="font-weight:600">${txRows.length}건 · ${Math.round(prevTotal/10000).toLocaleString()}만원</span>
+        </div>
+        <div style="display:flex;justify-content:space-between;margin-bottom:6px">
+          <span style="color:#555">새 내역</span>
+          <span style="font-weight:600">${newRows.length}건 · ${Math.round(newTotal/10000).toLocaleString()}만원</span>
+        </div>
+        <div style="border-top:1px solid #e0e0e0;padding-top:6px;display:flex;justify-content:space-between">
+          <span style="color:#1a73e8;font-weight:600">합산 시 합계</span>
+          <span style="color:#1a73e8;font-weight:600">${txRows.length+newRows.length}건 · ${Math.round((prevTotal+newTotal)/10000).toLocaleString()}만원</span>
+        </div>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:8px">
+        <button id="merge-add-btn" style="padding:10px;border-radius:8px;border:1.5px solid #1a73e8;background:#e8f0fe;color:#1a1a2e;font-size:13px;font-weight:600;cursor:pointer;text-align:left">
+          <span style="color:#1a73e8">+ 기존에 추가</span>
+          <span style="display:block;font-size:11px;color:#888;font-weight:400;margin-top:2px">기존 ${txRows.length}건 유지 후 새 ${newRows.length}건 추가 (합산)</span>
+        </button>
+        <button id="merge-replace-btn" style="padding:10px;border-radius:8px;border:1.5px solid #e53935;background:#fff;color:#1a1a2e;font-size:13px;font-weight:600;cursor:pointer;text-align:left">
+          <span style="color:#e53935">교체</span>
+          <span style="display:block;font-size:11px;color:#888;font-weight:400;margin-top:2px">기존 내역 삭제 후 새 ${newRows.length}건으로 교체</span>
+        </button>
+        <button id="merge-cancel-btn" style="padding:8px;border-radius:8px;border:1px solid #ddd;background:#fff;color:#555;font-size:13px;cursor:pointer">
+          취소
+        </button>
+      </div>
+    </div>`;
+  overlay.style.display='flex';
+
+  document.getElementById('merge-add-btn').onclick=()=>{
+    // 중복 제거: 같은 날짜+가맹점+금액이면 스킵
+    const existSet=new Set(txRows.map(r=>r.date+'|'+r.store+'|'+r.amt));
+    const deduped=newRows.filter(r=>!existSet.has(r.date+'|'+r.store+'|'+r.amt));
+    const dupes=newRows.length-deduped.length;
+    txRows=[...txRows,...deduped];
+    overlay.style.display='none';
+    finishApply();
+    if(dupes>0) showToast(`추가 완료 (중복 ${dupes}건 자동 제외)`);
+    else showToast(`기존 내역에 ${deduped.length}건 추가되었습니다`);
+  };
+
+  document.getElementById('merge-replace-btn').onclick=()=>{
+    txRows=newRows;
+    overlay.style.display='none';
+    finishApply();
+    showToast(`기존 내역을 새 ${newRows.length}건으로 교체했습니다`);
+  };
+
+  document.getElementById('merge-cancel-btn').onclick=()=>{
+    overlay.style.display='none';
+    showToast('업로드가 취소되었습니다');
+  };
+}
+
+function finishApply(){
+  const auto=txRows.filter(r=>r.auto).length;
+  document.getElementById('upload-msg').textContent=
+    `${txRows.length}건 처리 완료 · 자동분류 ${auto}건 / 미분류 ${txRows.length-auto}건`;
+  renderTxList();
+  if(!document.getElementById('tx-card').style.display||document.getElementById('tx-card').style.display==='none'){
+    // 내역창이 닫혀있으면 열기
+    document.getElementById('tx-reopen-wrap').style.display='none';
+    document.getElementById('tx-card').style.display='block';
+  }
+}
 
 function renderTxList(){
   const card=document.getElementById('tx-card');
